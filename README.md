@@ -2,6 +2,8 @@
 
 Speedrun basic chess endgames against a perfect defender.
 
+**Play it: <https://jeptah.github.io/checkmate-speedrun/>**
+
 You get a won position, the clock starts on your first move, and the computer
 defends with tablebase-best moves. At the end you see your time, your move
 count, and the fewest moves that were possible.
