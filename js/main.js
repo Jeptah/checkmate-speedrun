@@ -1,38 +1,29 @@
-import { KING_MOVES, attacksFrom, kingsAdjacent, squareName } from './chess.js';
-import { UNKNOWN, TRANSFORM, TRIANGLE_SQUARES, onDiagonal, tableIndex } from './tablebase.js';
+import { squareName } from './chess.js';
+import { ENDINGS } from './endings.js';
 
-const SETS = {
-  BN: 'Bishop + Knight',
-  BB: 'Two Bishops',
-  R: 'Rook',
-  Q: 'Queen',
-};
-const GLYPH = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞' };
+const GLYPH = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
 
 const $ = (id) => document.getElementById(id);
 const boardEl = $('board'), squaresEl = $('squares'), piecesEl = $('pieces');
 const overlayEl = $('overlay'), statusEl = $('status'), moveListEl = $('movelist');
 const timeEl = $('time'), movesEl = $('moves'), bestEl = $('best');
-const setEl = $('set'), startEl = $('start');
+const setEl = $('set'), startEl = $('start'), keysEl = $('keys');
 
-const tables = new Map();   // pieces -> Promise<{ table, standard }>
-let tb = null;
-let pieces = load('set', 'BN');
+let ending = ENDINGS.find((e) => e.key === load('set', 'BN')) ?? ENDINGS[0];
 let startMode = load('start', 'standard');
-if (!SETS[pieces]) pieces = 'BN';
+let keysOn = load('keys', '0') === '1';
 
-// Game state. `pos` holds squares: [white king, ...white pieces, black king];
-// a captured piece's square becomes -1.
-let types = [];
+// Game state. `pos` holds one square per man of the ending (-1 once captured).
 let pos = [];
 let status = 'loading';     // loading | ready | running | won | failed
 let history = [];           // { white, black, loss }
-let startDtm = 0;
+let startPar = 0;
 let t0 = 0, elapsed = 0;
 let selected = -1, targets = [];
 let lastMove = [];
 let drag = null;
 let pieceEls = [];
+let hoverSquare = -1;       // square under the mouse, for keyboard moves
 
 function load(key, fallback) {
   try { return localStorage.getItem('cs:' + key) ?? fallback; } catch { return fallback; }
@@ -41,146 +32,27 @@ function save(key, value) {
   try { localStorage.setItem('cs:' + key, value); } catch { /* private mode */ }
 }
 
-// ---------- tablebase ----------
-
-// Built tables are kept in IndexedDB so only the first visit pays for generation.
-const DB_STORE = 'tables';
-function db(mode, action) {
-  return new Promise((resolve) => {
-    let open;
-    try { open = indexedDB.open('checkmate-speedrun-tb2', 1); } catch { return resolve(null); }
-    open.onupgradeneeded = () => open.result.createObjectStore(DB_STORE);
-    open.onerror = () => resolve(null);
-    open.onsuccess = () => {
-      try {
-        const req = action(open.result.transaction(DB_STORE, mode).objectStore(DB_STORE));
-        req.onsuccess = () => resolve(req.result ?? null);
-        req.onerror = () => resolve(null);
-      } catch { resolve(null); }
-    };
-  });
-}
-
-function buildTable(p) {
-  return new Promise((resolve) => {
-    const worker = new Worker(new URL('./tb-worker.js', import.meta.url), { type: 'module' });
-    worker.onmessage = (e) => {
-      worker.terminate();
-      const { table, histogram } = e.data;
-      // Standard start: the most common mate length, so every run has the same par.
-      let standard = 1;
-      for (let d = 1; d < histogram.length; d++) {
-        if (histogram[d] > histogram[standard]) standard = d;
-      }
-      resolve({ table, standard });
-    };
-    worker.postMessage({ pieces: p });
-  });
-}
-
-function requestTable(p) {
-  if (!tables.has(p)) {
-    tables.set(p, (async () => {
-      const cached = await db('readonly', (store) => store.get(p));
-      if (cached?.table instanceof Uint8Array) return cached;
-      const built = await buildTable(p);
-      db('readwrite', (store) => store.put(built, p));
-      return built;
-    })());
-  }
-  return tables.get(p);
-}
-
-const dtm = (squares) => {
-  const v = tb.table[tableIndex(squares)];
-  return v === UNKNOWN ? Infinity : (v + 1) >> 1;
-};
-
-// Uniform over real positions: pick a stored entry, then a random board symmetry.
-function randomStart() {
-  const n = tb.table.length;
-  const want = startMode === 'standard' ? tb.standard * 2 - 1 : -1;
-  for (;;) {
-    let idx = Math.floor(Math.random() * n);
-    const v = tb.table[idx];
-    if (v === UNKNOWN || (want >= 0 ? v !== want : v < 5)) continue;
-    const squares = [];
-    for (let i = 1; i < types.length; i++) { squares.unshift(idx & 63); idx = Math.floor(idx / 64); }
-    squares.unshift(TRIANGLE_SQUARES[idx]);
-    // Diagonal-king positions are stored twice, so keep them half as often.
-    if (onDiagonal(squares[0]) && Math.random() < 0.5) continue;
-    const map = TRANSFORM[Math.floor(Math.random() * 8)];
-    return squares.map((s) => map[s]);
-  }
-}
-
-// ---------- rules ----------
-
-function occupancy(skipBlackKing) {
-  const occ = new Uint8Array(64);
-  const last = pos.length - (skipBlackKing ? 1 : 0);
-  for (let i = 0; i < last; i++) if (pos[i] >= 0) occ[pos[i]] = 1;
-  return occ;
-}
-
-function legalTargets(man) {
-  const occ = occupancy(false);
-  const bk = pos[pos.length - 1];
-  return attacksFrom(types[man], pos[man], occ).filter(
-    (t) => !occ[t] && !(man === 0 && kingsAdjacent(t, bk)),
-  );
-}
-
-function whiteAttacks() {
-  const occ = occupancy(true);
-  const att = new Uint8Array(64);
-  for (let i = 0; i < pos.length - 1; i++) {
-    if (pos[i] < 0) continue;
-    for (const t of attacksFrom(types[i], pos[i], occ)) att[t] = 1;
-  }
-  return att;
-}
-
-// Black plays the move that postpones mate the longest; takes a piece if it can.
-function blackReply() {
-  const k = pos.length - 1, bk = pos[k];
-  const att = whiteAttacks();
-  let best = [], bestValue = -1, capture = -1;
-  for (const d of KING_MOVES[bk]) {
-    if (att[d]) continue;
-    const victim = pos.indexOf(d);
-    if (victim >= 0) { capture = d; break; }
-    const next = pos.slice(); next[k] = d;
-    const v = tb.table[tableIndex(next)];
-    if (v > bestValue) { bestValue = v; best = [d]; }
-    else if (v === bestValue) best.push(d);
-  }
-  if (capture >= 0) return { to: capture, capture: true, check: !!att[bk] };
-  if (!best.length) return { to: -1, mate: !!att[bk], stalemate: !att[bk] };
-  return { to: best[Math.floor(Math.random() * best.length)], check: !!att[bk] };
-}
+const isWhiteMan = (i) => i >= 0 && ending.men[i].white && pos[i] >= 0;
+const playable = () => status === 'ready' || status === 'running';
 
 // ---------- game flow ----------
 
 async function newGame() {
-  const wanted = pieces;
+  const wanted = ending;
   status = 'loading';
   drag = null;
-  const pending = requestTable(wanted);
-  const slow = setTimeout(() => {
-    overlayEl.textContent = 'Building tablebase… (first visit only)';
+  const showProgress = (fraction) => {
+    if (wanted !== ending) return;
+    overlayEl.textContent = `Building tablebase… ${Math.round(fraction * 100)}% (first visit only)`;
     overlayEl.hidden = false;
-  }, 150);
-  const entry = await pending;
-  clearTimeout(slow);
-  if (wanted !== pieces) return;   // user switched sets meanwhile
+  };
+  await wanted.load(showProgress);
+  if (wanted !== ending) return;   // user switched endings meanwhile
   overlayEl.hidden = true;
-  tb = entry;
-  types = ['K', ...pieces, 'k'];
   renderStartOptions();
 
-  pos = randomStart();
-  startDtm = dtm(pos);
+  pos = ending.start(startMode);
+  startPar = ending.par(pos);
   history = [];
   elapsed = 0;
   selected = -1; targets = []; lastMove = [];
@@ -191,7 +63,7 @@ async function newGame() {
   renderStats();
   moveListEl.textContent = '';
   statusEl.className = '';
-  statusEl.textContent = 'Checkmate the king. The clock starts on your first move.';
+  statusEl.textContent = `${ending.goal} The clock starts on your first move.`;
   renderBest();
 }
 
@@ -201,40 +73,28 @@ function play(man, to, animate) {
     t0 = performance.now();
     requestAnimationFrame(tick);
   }
-  const before = dtm(pos);
-  pos[man] = to;
-  placePiece(man, animate);
+  const before = ending.par(pos);
+  const result = ending.play(pos, man, to);
+  pos = result.pos;
 
-  const k = pos.length - 1;
-  const reply = blackReply();
-  const record = {
-    white: (types[man] === 'K' ? 'K' : types[man]) + squareName(to)
-      + (reply.mate ? '#' : reply.check ? '+' : ''),
-    black: '',
-    loss: 0,
-  };
+  if (result.promoted >= 0) pieceEls[result.promoted].textContent = GLYPH.Q + '︎';
+  for (const i of result.removed) pieceEls[i].remove();
+  if (pos[man] >= 0) placePiece(man, animate);
+  lastMove = [];
+  if (result.blackMove) {
+    const [blackMan, from, dest] = result.blackMove;
+    lastMove = [from, dest];
+    placePiece(blackMan, true);
+  }
+
+  const record = { white: result.white, black: result.black, loss: 0 };
   history.push(record);
   selected = -1; targets = [];
-
-  if (reply.to < 0) {
-    lastMove = [];
-    finish(reply.mate ? 'won' : 'stalemate');
+  if (result.outcome) {
+    if (result.outcome !== 'won') record.loss = Infinity;
+    finish(result.outcome);
   } else {
-    lastMove = [pos[k], reply.to];
-    record.black = 'K' + (reply.capture ? 'x' : '') + squareName(reply.to);
-    if (reply.capture) {
-      const victim = pos.indexOf(reply.to);
-      pos[victim] = -1;
-      pieceEls[victim].remove();
-    }
-    pos[k] = reply.to;
-    placePiece(k, true);
-    if (reply.capture) {
-      record.loss = Infinity;
-      finish('captured');
-    } else {
-      record.loss = dtm(pos) - (before - 1);
-    }
+    record.loss = ending.par(pos) - (before - 1);
   }
   renderHighlights();
   renderStats();
@@ -245,17 +105,16 @@ function finish(outcome) {
   const n = history.length;
   if (outcome === 'won') {
     status = 'won';
-    const extra = n - startDtm;
+    const extra = n - startPar;
     statusEl.className = 'won';
-    statusEl.innerHTML = `Mate in <b>${n}</b> moves, <b>${seconds(elapsed)}s</b>. `
-      + `Tablebase optimum: <b>${startDtm}</b>`
+    statusEl.innerHTML = `${ending.wonIn} <b>${n}</b> move${n === 1 ? '' : 's'}, <b>${seconds(elapsed)}s</b>. `
+      + `Tablebase optimum: <b>${startPar}</b>`
       + (extra > 0 ? ` (+${extra}).` : ' — perfect.');
     updateBest(elapsed, extra);
   } else {
     status = 'failed';
     statusEl.className = 'failed';
-    statusEl.innerHTML = (outcome === 'stalemate' ? 'Stalemate.' : 'Piece lost — draw.')
-      + ` It was mate in <b>${startDtm}</b>.`;
+    statusEl.innerHTML = `${outcome} The optimum was <b>${startPar}</b> moves.`;
   }
   renderMoveList();
 }
@@ -291,11 +150,10 @@ const squareEl = (s) => squaresEl.children[(7 - (s >> 3)) * 8 + (s & 7)];
 
 function buildPieces() {
   piecesEl.textContent = '';
-  pieceEls = pos.map((_, i) => {
+  pieceEls = ending.men.map((man) => {
     const el = document.createElement('div');
-    const black = types[i] === 'k';
-    el.className = 'piece ' + (black ? 'black' : 'white');
-    el.textContent = GLYPH[black ? 'K' : types[i]] + '︎';
+    el.className = 'piece ' + (man.white ? 'white' : 'black');
+    el.textContent = GLYPH[man.type] + '︎';
     piecesEl.append(el);
     return el;
   });
@@ -329,31 +187,31 @@ function renderMoveList() {
   });
 }
 
-function bestKey() { return `best:${pieces}:${startMode}`; }
+function bestKey() { return `best:${ending.key}:${startMode}`; }
+function readBest() {
+  try { return JSON.parse(load(bestKey(), 'null')); } catch { return null; }
+}
 function renderBest() {
-  let best = null;
-  try { best = JSON.parse(load(bestKey(), 'null')); } catch { /* ignore */ }
+  const best = readBest();
   bestEl.textContent = best ? `${seconds(best.time)}s · +${best.extra}` : '–';
 }
 function updateBest(time, extra) {
-  let best = null;
-  try { best = JSON.parse(load(bestKey(), 'null')); } catch { /* ignore */ }
-  best = {
+  const best = readBest();
+  save(bestKey(), JSON.stringify({
     time: best ? Math.min(best.time, time) : time,
     extra: best ? Math.min(best.extra, extra) : extra,
-  };
-  save(bestKey(), JSON.stringify(best));
+  }));
   renderBest();
 }
 
 function renderStartOptions() {
   startEl.textContent = '';
-  startEl.add(new Option(`Standard · mate in ${tb.standard}`, 'standard'));
+  startEl.add(new Option(`Standard · ${ending.standardLabel()}`, 'standard'));
   startEl.add(new Option('Any position', 'random'));
   startEl.value = startMode;
 }
 
-// ---------- input ----------
+// ---------- mouse and touch ----------
 // Everything acts on pointerdown. Three ways to move: drag, click piece then
 // square, or just click a square that only one piece can reach.
 
@@ -367,18 +225,29 @@ function squareAt(e) {
 
 function select(man) {
   selected = man;
-  targets = man >= 0 ? legalTargets(man) : [];
+  targets = man >= 0 ? ending.targets(pos, man) : [];
+}
+
+// White men that can legally move to square `s`.
+function moversTo(s) {
+  const movers = [];
+  for (let i = 0; i < pos.length; i++) {
+    if (isWhiteMan(i) && ending.targets(pos, i).includes(s)) movers.push(i);
+  }
+  return movers;
 }
 
 boardEl.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   e.preventDefault();
-  if ((status !== 'ready' && status !== 'running') || drag) return;
+  if (!playable() || drag) return;
   const s = squareAt(e);
   if (s < 0) return;
 
+  // A selected piece capturing takes priority over selecting what stands there.
+  if (selected >= 0 && targets.includes(s)) { play(selected, s, true); return; }
   const man = pos.indexOf(s);
-  if (man >= 0 && man < pos.length - 1) {
+  if (isWhiteMan(man)) {
     drag = { man, id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, wasSelected: selected === man };
     select(man);
     boardEl.setPointerCapture(e.pointerId);
@@ -386,19 +255,16 @@ boardEl.addEventListener('pointerdown', (e) => {
     return;
   }
   if (selected >= 0) {
-    if (targets.includes(s)) { play(selected, s, true); return; }
     select(-1);
     renderHighlights();
     return;
   }
-  const movers = [];
-  for (let i = 0; i < pos.length - 1; i++) {
-    if (pos[i] >= 0 && legalTargets(i).includes(s)) movers.push(i);
-  }
+  const movers = moversTo(s);
   if (movers.length === 1) play(movers[0], s, true);
 });
 
 boardEl.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'mouse') setHover(squareAt(e));
   if (!drag || e.pointerId !== drag.id) return;
   if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 4) return;
   drag.moved = true;
@@ -423,7 +289,64 @@ function endDrag(e, cancelled) {
 }
 boardEl.addEventListener('pointerup', (e) => endDrag(e, false));
 boardEl.addEventListener('pointercancel', (e) => endDrag(e, true));
+boardEl.addEventListener('pointerleave', () => setHover(-1));
 boardEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---------- keyboard moves ----------
+// Optional: hover a square and press a piece key to move that piece there.
+
+const KEYS = {
+  KeyW: ['P', 'push'], KeyQ: ['P', 'left'], KeyE: ['P', 'right'],
+  KeyS: ['Q'], ShiftLeft: ['K'], ShiftRight: ['K'], Space: ['B'],
+  KeyA: ['N', 'left'], KeyD: ['N', 'right'],
+  Digit1: ['R', 'left'], Digit3: ['R', 'right'], Numpad1: ['R', 'left'], Numpad3: ['R', 'right'],
+};
+
+function setHover(s) {
+  if (s === hoverSquare) return;
+  if (hoverSquare >= 0) squareEl(hoverSquare).classList.remove('cursor');
+  hoverSquare = s;
+  if (s >= 0 && keysOn) squareEl(s).classList.add('cursor');
+}
+
+function keyMove(type, side) {
+  if (!playable() || drag || hoverSquare < 0) return;
+  const to = hoverSquare;
+  const movers = moversTo(to).filter((i) => {
+    if (ending.men[i].type !== type) return false;
+    if (type !== 'P') return true;
+    // Pawn: forward, or capturing towards the left / right.
+    const shift = (to & 7) - (pos[i] & 7);
+    return shift === (side === 'push' ? 0 : side === 'left' ? -1 : 1);
+  });
+  if (!movers.length) return;
+  // Two of a kind that can both get there: the key picks the left or right one.
+  movers.sort((a, b) => (pos[a] & 7) - (pos[b] & 7) || pos[a] - pos[b]);
+  const man = type !== 'P' && side === 'right' ? movers[movers.length - 1] : movers[0];
+  play(man, to, true);
+}
+
+function applyKeysOption() {
+  keysEl.checked = keysOn;
+  document.body.classList.toggle('keys-on', keysOn);
+  if (!keysOn && hoverSquare >= 0) squareEl(hoverSquare).classList.remove('cursor');
+  if (keysOn && hoverSquare >= 0) squareEl(hoverSquare).classList.add('cursor');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const key = keysOn ? KEYS[e.code] ?? (e.key === 'Shift' ? KEYS.ShiftLeft : null) : null;
+  if (key) {
+    e.preventDefault();
+    if (!e.repeat) keyMove(key[0], key[1]);
+    return;
+  }
+  if (e.repeat) return;
+  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') {
+    e.preventDefault();
+    newGame();
+  }
+});
 
 // ---------- board size ----------
 // Drag the bottom-right corner; unavailable during a run so it can't be hit by accident.
@@ -467,32 +390,32 @@ resizeEl.addEventListener('dblclick', () => {
   save('size', 0);
 });
 
-document.addEventListener('keydown', (e) => {
-  if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') {
-    e.preventDefault();
-    newGame();
-  }
-});
+// ---------- options ----------
+
 $('new').addEventListener('click', (e) => { e.currentTarget.blur(); newGame(); });
 
 setEl.addEventListener('change', () => {
-  pieces = setEl.value; save('set', pieces); setEl.blur(); newGame();
+  ending = ENDINGS.find((x) => x.key === setEl.value);
+  save('set', ending.key); setEl.blur(); newGame();
 });
 startEl.addEventListener('change', () => {
   startMode = startEl.value; save('start', startMode); startEl.blur(); newGame();
 });
+keysEl.addEventListener('change', () => {
+  keysOn = keysEl.checked; save('keys', keysOn ? '1' : '0'); keysEl.blur(); applyKeysOption();
+});
 
 // ---------- boot ----------
 
-for (const [value, label] of Object.entries(SETS)) setEl.add(new Option(label, value));
-setEl.value = pieces;
+for (const e of ENDINGS) setEl.add(new Option(e.label, e.key));
+setEl.value = ending.key;
 if (startMode !== 'standard' && startMode !== 'random') startMode = 'standard';
+applyKeysOption();
 buildSquares();
 newGame();
 
 // Debug handle for the console.
 window.cs = {
-  get tb() { return tb; }, get pos() { return pos; }, get status() { return status; },
-  get history() { return history; }, legalTargets, blackReply, play, dtm,
+  get ending() { return ending; }, get pos() { return pos; }, get status() { return status; },
+  get history() { return history; }, get hover() { return hoverSquare; }, play, squareName,
 };

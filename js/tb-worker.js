@@ -1,11 +1,20 @@
 import { generate } from './tablebase.js';
+import { createLucena } from './lucena.js';
 
+// job: { kind: 'mate', pieces } or { kind: 'lucena', file }
 self.onmessage = (e) => {
-  const pieces = e.data.pieces;
+  const job = e.data;
   const started = performance.now();
-  const { table, histogram } = generate(pieces);
+  let last = 0;
+  const onProgress = (fraction) => {
+    const now = performance.now();
+    if (now - last > 100) { last = now; self.postMessage({ progress: fraction }); }
+  };
+  const { table, histogram } = job.kind === 'lucena'
+    ? createLucena(job.file).generate(onProgress)
+    : generate(job.pieces);
   self.postMessage(
-    { pieces, table, histogram, ms: performance.now() - started },
+    { table, histogram, ms: performance.now() - started },
     [table.buffer, histogram.buffer],
   );
 };

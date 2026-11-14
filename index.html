@@ -13,6 +13,9 @@
       <div class="options">
         <select id="set" aria-label="Pieces"></select>
         <select id="start" aria-label="Starting position"></select>
+        <label class="toggle" title="Hover a square and press a piece key to move there">
+          <input type="checkbox" id="keys"> Keys
+        </label>
       </div>
     </header>
 
@@ -31,8 +34,14 @@
 
     <div class="footer">
       <p id="status"></p>
-      <button id="new" type="button">New position <kbd>Space</kbd></button>
+      <button id="new" type="button">New position <kbd class="no-keys">Space</kbd><kbd class="with-keys">R</kbd></button>
     </div>
+    <p id="keyhelp" class="keyhelp">
+      Hover a square, then:
+      <kbd>W</kbd> pawn <kbd>Q</kbd><kbd>E</kbd> pawn takes left / right
+      <kbd>S</kbd> queen <kbd>Shift</kbd> king <kbd>A</kbd><kbd>D</kbd> left / right knight
+      <kbd>1</kbd><kbd>3</kbd> left / right rook <kbd>Space</kbd> bishop
+    </p>
     <ol id="movelist"></ol>
   </main>
   <script type="module" src="js/main.js"></script>

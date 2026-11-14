@@ -43,7 +43,25 @@ h1 {
   text-transform: uppercase;
 }
 
-.options { display: flex; gap: 6px; }
+.options { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--dim);
+  cursor: pointer;
+  user-select: none;
+}
+.toggle input { accent-color: var(--accent); margin: 0; cursor: pointer; }
+
+/* Keyboard-move mode */
+.with-keys, .keyhelp { display: none; }
+.keys-on .with-keys { display: inline; }
+.keys-on .no-keys { display: none; }
+.keys-on .keyhelp { display: block; }
+.keyhelp { margin: 8px 0 0; font-size: 12px; line-height: 2; color: var(--dim); }
+.keyhelp kbd { margin: 0 2px 0 8px; }
+.sq.cursor { outline: 0.5cqw solid var(--accent); outline-offset: -0.5cqw; }
 
 select, button {
   font: inherit;
