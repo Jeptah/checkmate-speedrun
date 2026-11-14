@@ -7,16 +7,15 @@ const $ = (id) => document.getElementById(id);
 const boardEl = $('board'), squaresEl = $('squares'), piecesEl = $('pieces');
 const overlayEl = $('overlay'), statusEl = $('status'), moveListEl = $('movelist');
 const timeEl = $('time'), movesEl = $('moves'), bestEl = $('best');
-const setEl = $('set'), startEl = $('start'), keysEl = $('keys');
+const setEl = $('set'), startEl = $('start');
 
 let ending = ENDINGS.find((e) => e.key === load('set', 'BN')) ?? ENDINGS[0];
 let startMode = load('start', 'standard');
-let keysOn = load('keys', '0') === '1';
 
 // Game state. `pos` holds one square per man of the ending (-1 once captured).
 let pos = [];
 let status = 'loading';     // loading | ready | running | won | failed
-let history = [];           // { white, black, loss }
+let history = [];           // { white, black, loss, input: 'mouse' | 'key' }
 let startPar = 0;
 let t0 = 0, elapsed = 0;
 let selected = -1, targets = [];
@@ -64,10 +63,12 @@ async function newGame() {
   moveListEl.textContent = '';
   statusEl.className = '';
   statusEl.textContent = `${ending.goal} The clock starts on your first move.`;
+  bestEl.parentElement.classList.remove('record');
   renderBest();
 }
 
-function play(man, to, animate) {
+// `input` says how the move was entered, so runs can later be split by input method.
+function play(man, to, animate, input = 'mouse') {
   if (status === 'ready') {
     status = 'running';
     t0 = performance.now();
@@ -87,7 +88,7 @@ function play(man, to, animate) {
     placePiece(blackMan, true);
   }
 
-  const record = { white: result.white, black: result.black, loss: 0 };
+  const record = { white: result.white, black: result.black, loss: 0, input };
   history.push(record);
   selected = -1; targets = [];
   if (result.outcome) {
@@ -110,7 +111,13 @@ function finish(outcome) {
     statusEl.innerHTML = `${ending.wonIn} <b>${n}</b> move${n === 1 ? '' : 's'}, <b>${seconds(elapsed)}s</b>. `
       + `Tablebase optimum: <b>${startPar}</b>`
       + (extra > 0 ? ` (+${extra}).` : ' — perfect.');
-    updateBest(elapsed, extra);
+    const record = updateBest(elapsed, extra);
+    if (record.time || record.extra) {
+      const what = record.time && record.extra ? 'New best time and fewest extra moves'
+        : record.time ? 'New best time' : 'Fewest extra moves yet';
+      statusEl.innerHTML += `<span class="record">★ ${what}</span>`;
+      bestEl.parentElement.classList.add('record');
+    }
   } else {
     status = 'failed';
     statusEl.className = 'failed';
@@ -195,13 +202,16 @@ function renderBest() {
   const best = readBest();
   bestEl.textContent = best ? `${seconds(best.time)}s · +${best.extra}` : '–';
 }
+// Stores the run if it beats the best time or the fewest extra moves; says which.
 function updateBest(time, extra) {
   const best = readBest();
+  const record = { time: !best || time < best.time, extra: !best || extra < best.extra };
   save(bestKey(), JSON.stringify({
-    time: best ? Math.min(best.time, time) : time,
-    extra: best ? Math.min(best.extra, extra) : extra,
+    time: record.time ? time : best.time,
+    extra: record.extra ? extra : best.extra,
   }));
   renderBest();
+  return record;
 }
 
 function renderStartOptions() {
@@ -293,7 +303,7 @@ boardEl.addEventListener('pointerleave', () => setHover(-1));
 boardEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------- keyboard moves ----------
-// Optional: hover a square and press a piece key to move that piece there.
+// Hover a square and press a piece key to move that piece there.
 
 const KEYS = {
   KeyW: ['P', 'push'], KeyQ: ['P', 'left'], KeyE: ['P', 'right'],
@@ -306,7 +316,7 @@ function setHover(s) {
   if (s === hoverSquare) return;
   if (hoverSquare >= 0) squareEl(hoverSquare).classList.remove('cursor');
   hoverSquare = s;
-  if (s >= 0 && keysOn) squareEl(s).classList.add('cursor');
+  if (s >= 0) squareEl(s).classList.add('cursor');
 }
 
 function keyMove(type, side) {
@@ -323,26 +333,19 @@ function keyMove(type, side) {
   // Two of a kind that can both get there: the key picks the left or right one.
   movers.sort((a, b) => (pos[a] & 7) - (pos[b] & 7) || pos[a] - pos[b]);
   const man = type !== 'P' && side === 'right' ? movers[movers.length - 1] : movers[0];
-  play(man, to, true);
-}
-
-function applyKeysOption() {
-  keysEl.checked = keysOn;
-  document.body.classList.toggle('keys-on', keysOn);
-  if (!keysOn && hoverSquare >= 0) squareEl(hoverSquare).classList.remove('cursor');
-  if (keysOn && hoverSquare >= 0) squareEl(hoverSquare).classList.add('cursor');
+  play(man, to, true, 'key');
 }
 
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  const key = keysOn ? KEYS[e.code] ?? (e.key === 'Shift' ? KEYS.ShiftLeft : null) : null;
+  const key = KEYS[e.code] ?? (e.key === 'Shift' ? KEYS.ShiftLeft : null);
   if (key) {
     e.preventDefault();
     if (!e.repeat) keyMove(key[0], key[1]);
     return;
   }
   if (e.repeat) return;
-  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') {
+  if (e.code === 'Enter' || e.code === 'KeyR') {
     e.preventDefault();
     newGame();
   }
@@ -355,10 +358,11 @@ const MIN_BOARD = 280, MAX_BOARD = 1400;
 const resizeEl = $('resize');
 let resizing = null;
 
+// The stylesheet caps this at the largest board that fits without scrolling.
 function applyBoardSize(px) {
   const root = document.documentElement.style;
-  if (px) root.setProperty('--board', `min(100vw - 24px, ${px}px)`);
-  else root.removeProperty('--board');
+  if (px) root.setProperty('--user-size', `${px}px`);
+  else root.removeProperty('--user-size');
 }
 applyBoardSize(Number(load('size', 0)) || 0);
 
@@ -374,12 +378,17 @@ resizeEl.addEventListener('pointermove', (e) => {
   // The board is centred, so a sideways drag moves the corner half as far.
   const dx = 2 * (e.clientX - resizing.x), dy = e.clientY - resizing.y;
   const size = resizing.size + (Math.abs(dx) > Math.abs(dy) ? dx : dy);
-  resizing.now = Math.round(Math.max(MIN_BOARD, Math.min(MAX_BOARD, window.innerWidth - 24, size)));
-  applyBoardSize(resizing.now);
+  applyBoardSize(Math.round(Math.max(MIN_BOARD, Math.min(MAX_BOARD, size))));
+  resizing.changed = true;
 });
 const endResize = (e) => {
   if (!resizing || e.pointerId !== resizing.id) return;
-  if (resizing.now) save('size', resizing.now);
+  if (resizing.changed) {
+    // Keep what was actually reached, not how far the pointer overshot.
+    const reached = Math.round(boardEl.getBoundingClientRect().width);
+    applyBoardSize(reached);
+    save('size', reached);
+  }
   resizing = null;
 };
 resizeEl.addEventListener('pointerup', endResize);
@@ -401,16 +410,12 @@ setEl.addEventListener('change', () => {
 startEl.addEventListener('change', () => {
   startMode = startEl.value; save('start', startMode); startEl.blur(); newGame();
 });
-keysEl.addEventListener('change', () => {
-  keysOn = keysEl.checked; save('keys', keysOn ? '1' : '0'); keysEl.blur(); applyKeysOption();
-});
 
 // ---------- boot ----------
 
 for (const e of ENDINGS) setEl.add(new Option(e.label, e.key));
 setEl.value = ending.key;
 if (startMode !== 'standard' && startMode !== 'random') startMode = 'standard';
-applyKeysOption();
 buildSquares();
 newGame();
 

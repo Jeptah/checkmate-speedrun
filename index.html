@@ -7,24 +7,9 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Wide screens: board on the left, panel on the right. Narrow screens: the
+       panel's children are laid out around the board in one column (see style.css). -->
   <main>
-    <header>
-      <h1>Checkmate Speedrun</h1>
-      <div class="options">
-        <select id="set" aria-label="Pieces"></select>
-        <select id="start" aria-label="Starting position"></select>
-        <label class="toggle" title="Hover a square and press a piece key to move there">
-          <input type="checkbox" id="keys"> Keys
-        </label>
-      </div>
-    </header>
-
-    <div class="stats">
-      <div class="stat"><span id="time">0.00</span><label>seconds</label></div>
-      <div class="stat"><span id="moves">0</span><label>moves</label></div>
-      <div class="stat best"><span id="best">–</span><label>best</label></div>
-    </div>
-
     <div id="board" class="board">
       <div id="squares"></div>
       <div id="pieces"></div>
@@ -32,17 +17,39 @@
       <div id="overlay" class="overlay" hidden></div>
     </div>
 
-    <div class="footer">
-      <p id="status"></p>
-      <button id="new" type="button">New position <kbd class="no-keys">Space</kbd><kbd class="with-keys">R</kbd></button>
-    </div>
-    <p id="keyhelp" class="keyhelp">
-      Hover a square, then:
-      <kbd>W</kbd> pawn <kbd>Q</kbd><kbd>E</kbd> pawn takes left / right
-      <kbd>S</kbd> queen <kbd>Shift</kbd> king <kbd>A</kbd><kbd>D</kbd> left / right knight
-      <kbd>1</kbd><kbd>3</kbd> left / right rook <kbd>Space</kbd> bishop
-    </p>
-    <ol id="movelist"></ol>
+    <aside class="panel">
+      <header>
+        <h1>Checkmate Speedrun</h1>
+        <div class="options">
+          <select id="set" aria-label="Pieces"></select>
+          <select id="start" aria-label="Starting position"></select>
+        </div>
+      </header>
+
+      <div class="stats">
+        <div class="stat"><span id="time">0.00</span><label>seconds</label></div>
+        <div class="stat"><span id="moves">0</span><label>moves</label></div>
+        <div class="stat best"><span id="best">–</span><label>best</label></div>
+      </div>
+
+      <div class="footer">
+        <p id="status"></p>
+        <button id="new" type="button">New position <kbd>R</kbd></button>
+      </div>
+
+      <ol id="movelist"></ol>
+
+      <p class="keyhelp">
+        <span>Hover a square and press</span>
+        <span><kbd>W</kbd> pawn</span>
+        <span><kbd>Q</kbd><kbd>E</kbd> pawn takes</span>
+        <span><kbd>S</kbd> queen</span>
+        <span><kbd>Shift</kbd> king</span>
+        <span><kbd>A</kbd><kbd>D</kbd> knight</span>
+        <span><kbd>1</kbd><kbd>3</kbd> rook</span>
+        <span><kbd>Space</kbd> bishop</span>
+      </p>
+    </aside>
   </main>
   <script type="module" src="js/main.js"></script>
 </body>
