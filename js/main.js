@@ -10,7 +10,13 @@ const timeEl = $('time'), movesEl = $('moves'), bestEl = $('best');
 const setEl = $('set'), startEl = $('start');
 
 let ending = ENDINGS.find((e) => e.key === load('set', 'BN')) ?? ENDINGS[0];
-let startMode = load('start', 'standard');
+let startMode = savedMode();   // standard | random | shared
+let pinned = null;             // the position a shared link asked for
+let startPos = [];             // where the current run started
+
+function savedMode() {
+  return load('start', 'standard') === 'random' ? 'random' : 'standard';
+}
 
 // Game state. `pos` holds one square per man of the ending (-1 once captured).
 let pos = [];
@@ -48,9 +54,18 @@ async function newGame() {
   await wanted.load(showProgress);
   if (wanted !== ending) return;   // user switched endings meanwhile
   overlayEl.hidden = true;
-  renderStartOptions();
 
-  pos = ending.start(startMode);
+  // A shared position is only used if this ending can actually be won from it.
+  if (startMode === 'shared') {
+    const usable = pinned && ending.adopt?.(pinned) !== false && ending.par(pinned) >= 1
+      && Number.isFinite(ending.par(pinned));
+    if (!usable) { pinned = null; startMode = savedMode(); }
+  }
+  renderStartOptions();
+  syncHash();
+
+  pos = startMode === 'shared' ? pinned.slice() : ending.start(startMode);
+  startPos = pos.slice();
   startPar = ending.par(pos);
   history = [];
   elapsed = 0;
@@ -194,7 +209,10 @@ function renderMoveList() {
   });
 }
 
-function bestKey() { return `best:${ending.key}:${startMode}`; }
+// A shared position keeps its own record, so friends compare like with like.
+function bestKey() {
+  return `best:${ending.key}:${startMode === 'shared' ? positionCode(pinned) : startMode}`;
+}
 function readBest() {
   try { return JSON.parse(load(bestKey(), 'null')); } catch { return null; }
 }
@@ -218,7 +236,60 @@ function renderStartOptions() {
   startEl.textContent = '';
   startEl.add(new Option(`Standard · ${ending.standardLabel()}`, 'standard'));
   startEl.add(new Option('Any position', 'random'));
+  if (pinned) startEl.add(new Option('Shared position', 'shared'));
   startEl.value = startMode;
+}
+
+// ---------- sharing ----------
+// A link is "#<ending>/<squares>", e.g. #BN/c3f1d5e8: the start square of each man.
+
+const positionCode = (p) => p.map(squareName).join('');
+const shareHash = (p) => `#${ending.key}/${positionCode(p)}`;
+
+function readShared() {
+  const m = /^#([\w-]+)\/((?:[a-h][1-8])+)$/.exec(location.hash);
+  const found = m && ENDINGS.find((e) => e.key === m[1]);
+  if (!found) return false;
+  const squares = m[2].match(/../g).map((n) => 'abcdefgh'.indexOf(n[0]) + 8 * (n[1] - 1));
+  if (squares.length !== found.men.length || new Set(squares).size !== squares.length) return false;
+  ending = found;
+  pinned = squares;
+  startMode = 'shared';
+  return true;
+}
+
+// The address bar shows the shared link only while that position is being played.
+function syncHash() {
+  const want = startMode === 'shared' ? shareHash(pinned) : '';
+  if (location.hash !== want) {
+    window.history.replaceState(null, '', location.pathname + location.search + want);
+  }
+}
+
+const shareEl = $('share');
+let shareTimer = 0;
+
+async function share() {
+  if (!startPos.length) return;
+  const url = location.origin + location.pathname + shareHash(startPos);
+  const n = history.length;
+  const text = status === 'won'
+    ? `Checkmate Speedrun · ${ending.label}: ${n} move${n === 1 ? '' : 's'} in ${seconds(elapsed)}s `
+      + `(optimum ${startPar}). Can you beat it?`
+    : `Checkmate Speedrun · ${ending.label}, optimum ${startPar} move${startPar === 1 ? '' : 's'}. `
+      + 'Try this position:';
+  try {
+    if (navigator.share && matchMedia('(pointer: coarse)').matches) {
+      await navigator.share({ text, url });
+      return;
+    }
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    shareEl.textContent = 'Copied';
+    clearTimeout(shareTimer);
+    shareTimer = setTimeout(() => { shareEl.textContent = 'Share'; }, 1500);
+  } catch (err) {
+    if (err.name !== 'AbortError') window.prompt('Copy this to share:', `${text} ${url}`);
+  }
 }
 
 // ---------- mouse and touch ----------
@@ -421,12 +492,21 @@ resizeEl.addEventListener('dblclick', () => {
 
 $('new').addEventListener('click', (e) => { e.currentTarget.blur(); newGame(); });
 
+shareEl.addEventListener('click', (e) => { e.currentTarget.blur(); share(); });
+
 setEl.addEventListener('change', () => {
   ending = ENDINGS.find((x) => x.key === setEl.value);
+  pinned = null;                               // a shared position belongs to its ending
+  if (startMode === 'shared') startMode = savedMode();
   save('set', ending.key); setEl.blur(); newGame();
 });
 startEl.addEventListener('change', () => {
-  startMode = startEl.value; save('start', startMode); startEl.blur(); newGame();
+  startMode = startEl.value;
+  if (startMode !== 'shared') save('start', startMode);
+  startEl.blur(); newGame();
+});
+window.addEventListener('hashchange', () => {
+  if (readShared()) { setEl.value = ending.key; newGame(); }
 });
 
 // ---------- boot ----------
@@ -440,8 +520,8 @@ for (const e of ENDINGS) {
   }
   group.append(new Option(e.label, e.key));
 }
+readShared();
 setEl.value = ending.key;
-if (startMode !== 'standard' && startMode !== 'random') startMode = 'standard';
 buildSquares();
 newGame();
 

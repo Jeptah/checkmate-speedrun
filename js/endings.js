@@ -5,6 +5,8 @@
 //   load(onProgress)               builds or fetches the tablebase
 //   standardLabel()                text for the fixed-length start option
 //   start(mode)                    random position: array of squares, one per man
+//   adopt(pos)                     optional: prepare for a position from a shared link;
+//                                  false if it cannot be played
 //   par(pos)                       optimal number of moves to win (Infinity if not won)
 //   targets(pos, man)              legal destination squares for a white man
 //   play(pos, man, to)             plays White's move and Black's reply; returns
@@ -220,6 +222,12 @@ function lucenaEnding(FILE, key, label) {
     },
     standardLabel: () => `win in ${standard}`,
 
+    // A position from a shared link: work out which way round the board is.
+    adopt(pos) {
+      mirror = (pos[2] & 7) !== FILE;
+      return flip(pos[2]) === rules.P;
+    },
+
     // The king always starts on the queening square, in front of its pawn. Standard
     // starts also keep the defending king on its back two ranks, as in the textbook position.
     start(mode) {
@@ -348,6 +356,12 @@ function winEnding({ key, label, group, goal, white, black, options }) {
       return loading;
     },
     standardLabel: () => `win in ${standard}`,
+
+    // Can a position from a shared link be played here?
+    adopt(pos) {
+      const [lo, hi] = options?.pawnRanks ?? [1, 6];
+      return pawn < 0 || ((pos[pawn] >> 3) >= lo && (pos[pawn] >> 3) <= hi);
+    },
 
     start(mode) {
       for (;;) {
