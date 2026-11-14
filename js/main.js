@@ -303,7 +303,8 @@ boardEl.addEventListener('pointerleave', () => setHover(-1));
 boardEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------- keyboard moves ----------
-// Hover a square and press a piece key to move that piece there.
+// Hover a square and press a piece key to move that piece there. Keep the key held
+// and the piece moves again each time the mouse reaches another square it can go to.
 
 const KEYS = {
   KeyW: ['P', 'push'], KeyQ: ['P', 'left'], KeyE: ['P', 'right'],
@@ -312,11 +313,22 @@ const KEYS = {
   Digit1: ['R', 'left'], Digit3: ['R', 'right'], Numpad1: ['R', 'left'], Numpad3: ['R', 'right'],
 };
 
+// Piece keys currently held down, most recent last. While one is held, every new
+// square the mouse enters is tried as a move for that piece.
+const held = [];
+
 function setHover(s) {
   if (s === hoverSquare) return;
   if (hoverSquare >= 0) squareEl(hoverSquare).classList.remove('cursor');
   hoverSquare = s;
-  if (s >= 0) squareEl(s).classList.add('cursor');
+  if (s < 0) return;
+  squareEl(s).classList.add('cursor');
+  if (held.length) keyMove(...held[held.length - 1].key);
+}
+
+function release(code) {
+  const i = held.findIndex((h) => h.code === code);
+  if (i >= 0) held.splice(i, 1);
 }
 
 function keyMove(type, side) {
@@ -341,7 +353,10 @@ document.addEventListener('keydown', (e) => {
   const key = KEYS[e.code] ?? (e.key === 'Shift' ? KEYS.ShiftLeft : null);
   if (key) {
     e.preventDefault();
-    if (!e.repeat) keyMove(key[0], key[1]);
+    if (e.repeat) return;
+    release(e.code || e.key);
+    held.push({ code: e.code || e.key, key });
+    keyMove(key[0], key[1]);
     return;
   }
   if (e.repeat) return;
@@ -350,6 +365,9 @@ document.addEventListener('keydown', (e) => {
     newGame();
   }
 });
+
+document.addEventListener('keyup', (e) => release(e.code || e.key));
+window.addEventListener('blur', () => { held.length = 0; });
 
 // ---------- board size ----------
 // Drag the bottom-right corner; unavailable during a run so it can't be hit by accident.
@@ -413,7 +431,15 @@ startEl.addEventListener('change', () => {
 
 // ---------- boot ----------
 
-for (const e of ENDINGS) setEl.add(new Option(e.label, e.key));
+for (const e of ENDINGS) {
+  let group = [...setEl.children].find((g) => g.label === e.group);
+  if (!group) {
+    group = document.createElement('optgroup');
+    group.label = e.group;
+    setEl.append(group);
+  }
+  group.append(new Option(e.label, e.key));
+}
 setEl.value = ending.key;
 if (startMode !== 'standard' && startMode !== 'random') startMode = 'standard';
 buildSquares();

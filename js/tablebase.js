@@ -57,7 +57,7 @@ export function tableIndex(squares) {
 
 // ---------- generation ----------
 
-class IntList {
+export class IntList {
   constructor() { this.data = new Int32Array(1 << 16); this.length = 0; }
   push(v) {
     if (this.length === this.data.length) {

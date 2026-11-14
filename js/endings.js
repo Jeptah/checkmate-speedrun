@@ -1,6 +1,6 @@
 // The endings a player can run. Each one exposes the same small interface:
 //
-//   key, label, goal, wonIn        strings for the UI
+//   key, label, group, goal, wonIn strings for the UI
 //   men                            [{ type, white }] in board-array order
 //   load(onProgress)               builds or fetches the tablebase
 //   standardLabel()                text for the fixed-length start option
@@ -16,6 +16,7 @@
 import { KING_MOVES, attacksFrom, kingsAdjacent, squareName } from './chess.js';
 import { UNKNOWN, TRANSFORM, TRIANGLE_SQUARES, onDiagonal, tableIndex } from './tablebase.js';
 import { createLucena, moveMan, moveTo, moveKind } from './lucena.js';
+import { createGame, manOf, toOf, kindOf } from './wintable.js';
 
 const rand = (n) => Math.floor(Math.random() * n);
 const pick = (list) => list[rand(list.length)];
@@ -23,10 +24,11 @@ const pick = (list) => list[rand(list.length)];
 // ---------- tablebase storage ----------
 // Built tables are kept in IndexedDB so only the first visit pays for generation.
 
-const DB_NAME = 'checkmate-speedrun-tb3', DB_STORE = 'tables';
+const DB_NAME = 'checkmate-speedrun-tb4', DB_STORE = 'tables';
 try {
   indexedDB.deleteDatabase('checkmate-speedrun');
   indexedDB.deleteDatabase('checkmate-speedrun-tb2');
+  indexedDB.deleteDatabase('checkmate-speedrun-tb3');
 } catch { /* no IndexedDB */ }
 
 function db(mode, action) {
@@ -106,6 +108,7 @@ function mateEnding(pieces, label) {
   return {
     key: pieces,
     label,
+    group: 'Checkmates',
     goal: 'Checkmate the king.',
     wonIn: 'Mate in',
     men: types.map((t) => ({ type: t === 'k' ? 'K' : t, white: t !== 'k' })),
@@ -182,8 +185,7 @@ function mateEnding(pieces, label) {
 // Men: [white king, white rook, pawn, black king, black rook]. The table is built
 // for a d-pawn; half the runs are mirrored to an e-pawn.
 
-function lucenaEnding() {
-  const FILE = 3;
+function lucenaEnding(FILE, key, label) {
   const rules = createLucena(FILE);
   const buffer = new Int32Array(64);
   let table = null, standard = 0, loading = null, mirror = false;
@@ -195,8 +197,9 @@ function lucenaEnding() {
     Array.from(buffer.subarray(0, generator(wk, wr, bk, br, buffer)));
 
   return {
-    key: 'lucena',
-    label: 'Lucena (R + P vs R)',
+    key,
+    label,
+    group: 'Rook endings',
     goal: 'Queen the pawn safely, or win the rook.',
     wonIn: 'Won in',
     men: [
@@ -221,12 +224,13 @@ function lucenaEnding() {
     // starts also keep the defending king on its back two ranks, as in the textbook position.
     start(mode) {
       const wk = rules.Q8;
-      for (;;) {
+      for (let tries = 0; ; tries++) {
         const wr = rand(64), bk = rand(64), br = rand(64);
         const v = table[index(wk, wr, bk, br)];
         if (v === UNKNOWN) continue;
         const moves = (v + 1) >> 1;
-        if (mode === 'standard' ? moves !== standard || bk < 48 : moves < 3) continue;
+        // (the back-rank rule is dropped if no such position turns up)
+        if (mode === 'standard' ? moves !== standard || (bk < 48 && tries < 1e6) : moves < 3) continue;
         mirror = Math.random() < 0.5;
         return [wk, wr, rules.P, bk, br].map(flip);
       }
@@ -306,10 +310,160 @@ function lucenaEnding() {
   };
 }
 
+// ---------- conversion endings: win a piece, win the pawn, or queen ----------
+// The run ends at the first capture or promotion (see wintable.js).
+
+const NAME = { K: 'King', Q: 'Queen', R: 'Rook', B: 'Bishop', N: 'Knight', P: 'Pawn' };
+
+function winEnding({ key, label, group, goal, white, black, options }) {
+  const game = createGame(white, black, options);
+  const { types, BK, pawn } = game;
+  let table = null, standard = 0, loading = null;
+
+  const letter = (man) => (types[man] === 'P' ? '' : types[man]);
+  const describe = (pos, m) => {
+    const man = manOf(m), to = toOf(m), kind = kindOf(m);
+    const takes = kind & 1 ? (man === pawn ? squareName(pos[man])[0] : '') + 'x' : '';
+    return letter(man) + takes + squareName(to) + (kind & 2 ? '=Q' : '');
+  };
+  const apply = (pos, m, out) => {
+    const man = manOf(m), to = toOf(m);
+    const victim = pos.indexOf(to);
+    if (victim >= 0) { pos[victim] = -1; out.removed.push(victim); }
+    pos[man] = to;
+    if (kindOf(m) & 2) out.promoted = man;
+    return victim;
+  };
+
+  return {
+    key, label, group, goal,
+    wonIn: 'Won in',
+    men: types.map((type, i) => ({ type, white: i < BK })),
+
+    load(onProgress) {
+      loading ??= loadTable('win-' + key, { kind: 'win', white, black, options }, onProgress).then((entry) => {
+        table = entry.table;
+        standard = standardLength(entry.histogram);
+      });
+      return loading;
+    },
+    standardLabel: () => `win in ${standard}`,
+
+    start(mode) {
+      for (;;) {
+        const idx = rand(table.length);
+        const v = table[idx];
+        if (v === UNKNOWN) continue;
+        const moves = (v + 1) >> 1;
+        if (mode === 'standard' ? moves !== standard : moves < Math.min(3, standard)) continue;
+        // Any mirror image is as good: left-right with a pawn, all eight without.
+        const map = pawn >= 0 ? TRANSFORM[rand(2)] : TRANSFORM[rand(8)];
+        return game.squaresOf(idx).map((s) => map[s]);
+      }
+    },
+
+    par(pos) {
+      if (pos.includes(-1)) return Infinity;
+      const v = table[game.indexOf(pos)];
+      return v === UNKNOWN ? Infinity : (v + 1) >> 1;
+    },
+
+    targets(pos, man) {
+      if (pos.includes(-1)) return [];
+      return game.legalMoves(pos, true).filter((m) => manOf(m) === man).map(toOf);
+    },
+
+    play(pos, man, to) {
+      const move = game.legalMoves(pos, true).find((m) => manOf(m) === man && toOf(m) === to);
+      const next = pos.slice();
+      const out = { pos: next, white: describe(pos, move), black: '', blackMove: null, removed: [], promoted: -1, outcome: null };
+      apply(next, move, out);
+
+      // A capture or promotion ends the run and is judged on the spot.
+      if (kindOf(move)) {
+        out.outcome = game.eventWins(pos, move) ? 'won'
+          : 'That hangs a piece or is stalemate — no win.';
+        return out;
+      }
+
+      const check = game.blackInCheck(next);
+      const replies = game.legalMoves(next, false);
+      if (!replies.length) {
+        out.white += check ? '#' : '';
+        out.outcome = check ? 'won' : 'Stalemate.';
+        return out;
+      }
+      if (check) out.white += '+';
+
+      // Black takes, or queens if the queen survives; otherwise it holds out as long
+      // as possible. Queening into the loss of the queen is the last resort.
+      const quiet = replies.filter((m) => !kindOf(m));
+      let reply = replies.find((m) => kindOf(m) & 1)
+        ?? replies.find((m) => kindOf(m) && game.eventSaves(next, m));
+      const saved = !!reply;
+      if (!reply && !quiet.length) reply = replies[0];
+      if (!reply) {
+        let best = [], bestValue = -1;
+        for (const m of quiet) {
+          const after = next.slice();
+          after[manOf(m)] = toOf(m);
+          const v = table[game.indexOf(after)];
+          if (v > bestValue) { bestValue = v; best = [m]; } else if (v === bestValue) best.push(m);
+        }
+        reply = pick(best);
+      }
+      const slot = manOf(reply);
+      out.blackMove = [slot, next[slot], toOf(reply)];
+      out.black = describe(next, reply);
+      const victim = apply(next, reply, out);
+      if (victim >= 0) out.outcome = `${NAME[types[victim]]} lost — no win.`;
+      else if (kindOf(reply)) out.outcome = saved ? 'The pawn queened — no win.' : 'won';
+      return out;
+    },
+  };
+}
+
+// Standard start for conversion endings: the longest win that still has plenty of
+// positions. Wins in one or two moves (a piece simply hangs) are left out of the count.
+function standardLength(histogram) {
+  const most = Math.max(...histogram.subarray(3));
+  let length = histogram.length - 1;
+  while (length > 3 && histogram[length] < most / 10) length--;
+  return length;
+}
+
 export const ENDINGS = [
-  mateEnding('BN', 'Bishop + Knight'),
-  mateEnding('BB', 'Two Bishops'),
-  mateEnding('R', 'Rook'),
   mateEnding('Q', 'Queen'),
-  lucenaEnding(),
+  mateEnding('R', 'Rook'),
+  mateEnding('BB', 'Two Bishops'),
+  mateEnding('BN', 'Bishop + Knight'),
+  winEnding({
+    key: 'QvR', label: 'Queen vs Rook', group: 'Queen vs piece',
+    goal: 'Win the rook, or checkmate.', white: 'KQ', black: 'KR',
+  }),
+  winEnding({
+    key: 'QvB', label: 'Queen vs Bishop', group: 'Queen vs piece',
+    goal: 'Win the bishop, or checkmate.', white: 'KQ', black: 'KB',
+  }),
+  winEnding({
+    key: 'QvN', label: 'Queen vs Knight', group: 'Queen vs piece',
+    goal: 'Win the knight, or checkmate.', white: 'KQ', black: 'KN',
+  }),
+  winEnding({
+    key: 'PvK', label: 'Pawn vs King', group: 'Pawn endings',
+    goal: 'Queen the pawn safely.', white: 'KP', black: 'K',
+  }),
+  winEnding({
+    key: 'QvP', label: 'Queen vs Pawn on the 7th', group: 'Pawn endings',
+    goal: 'Win the pawn before it queens, or checkmate.', white: 'KQ', black: 'KP',
+    options: { pawnRanks: [1, 1] },
+  }),
+  winEnding({
+    key: 'RvP', label: 'Rook vs Pawn', group: 'Pawn endings',
+    goal: 'Win the pawn before it queens, or checkmate.', white: 'KR', black: 'KP',
+  }),
+  lucenaEnding(3, 'lucena', 'Lucena · centre pawn'),
+  lucenaEnding(2, 'lucena-c', 'Lucena · bishop pawn'),
+  lucenaEnding(1, 'lucena-b', 'Lucena · knight pawn'),
+  lucenaEnding(0, 'lucena-a', 'Rook + rook pawn vs Rook'),
 ];
