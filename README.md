@@ -68,6 +68,13 @@ Known simplifications in the pawn endings: the defender only promotes to a
 queen, and a win that needs more than one move after the defender queens is not
 counted as a win.
 
+## Sounds
+
+The **Sound** button switches between recorded sounds, fully generated sounds,
+and silence. The `.ogg` recordings in `sounds/` are from the
+[Impact Sounds](https://kenney.nl/assets/impact-sounds) pack by Kenney (CC0);
+the generated sounds are synthesised in the browser by `js/sound.js`.
+
 ## Run locally
 
 Any static file server works. With Python:
@@ -91,3 +98,4 @@ not work, because browsers block module scripts and workers on `file://` pages.
 | `js/lucena.js` | Rules and table for rook + pawn vs rook |
 | `js/tb-worker.js` | Web worker that builds the tables |
 | `js/chess.js` | Board geometry |
+| `js/sound.js`, `sounds/` | Sound effects |

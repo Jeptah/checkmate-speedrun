@@ -1,5 +1,6 @@
-import { squareName } from './chess.js';
+import { attacksFrom, squareName } from './chess.js';
 import { ENDINGS } from './endings.js';
+import * as sound from './sound.js';
 
 const GLYPH = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
 
@@ -103,6 +104,13 @@ function play(man, to, animate, input = 'mouse') {
     placePiece(blackMan, true);
   }
 
+  // The reply lands at the same instant; its sound follows a beat later.
+  sound.unlock();
+  sound.play(result.white.includes('x') ? 'capture' : 'move');
+  if (result.blackMove) sound.play(result.black.includes('x') ? 'capture' : 'move', 0.1, 0.8);
+  if (!result.outcome && result.white.endsWith('+')) sound.play('check', 0.03);
+  if (!result.outcome && whiteInCheck()) sound.play('checked', 0.13);
+
   const record = { white: result.white, black: result.black, loss: 0, input };
   history.push(record);
   selected = -1; targets = [];
@@ -114,6 +122,19 @@ function play(man, to, animate, input = 'mouse') {
   }
   renderHighlights();
   renderStats();
+}
+
+// Is the white king attacked by one of the defender's pieces? (Only used for sound.)
+function whiteInCheck() {
+  const king = pos[ending.men.findIndex((m) => m.white && m.type === 'K')];
+  const occ = new Uint8Array(64);
+  for (const s of pos) if (s >= 0) occ[s] = 1;
+  return ending.men.some((man, i) => {
+    const s = pos[i];
+    if (man.white || man.type === 'K' || s < 0) return false;
+    if (man.type !== 'P') return attacksFrom(man.type, s, occ).includes(king);
+    return (king === s - 9 && (s & 7) > 0) || (king === s - 7 && (s & 7) < 7);
+  });
 }
 
 function finish(outcome) {
@@ -133,7 +154,9 @@ function finish(outcome) {
       statusEl.innerHTML += `<span class="record">★ ${what}</span>`;
       bestEl.parentElement.classList.add('record');
     }
+    sound.play(record.time || record.extra ? 'record' : 'win', 0.2);
   } else {
+    sound.play('fail', 0.2);
     status = 'failed';
     statusEl.className = 'failed';
     statusEl.innerHTML = `${outcome} The optimum was <b>${startPar}</b> moves.`;
@@ -284,12 +307,30 @@ async function share() {
       return;
     }
     await navigator.clipboard.writeText(`${text}\n${url}`);
-    shareEl.textContent = 'Copied';
-    clearTimeout(shareTimer);
-    shareTimer = setTimeout(() => { shareEl.textContent = 'Share'; }, 1500);
+    flashShare('Copied');
   } catch (err) {
-    if (err.name !== 'AbortError') window.prompt('Copy this to share:', `${text} ${url}`);
+    if (err.name === 'AbortError') return;      // share sheet dismissed
+    flashShare(copyByHand(`${text}\n${url}`) ? 'Copied' : 'Copy failed');
   }
+}
+
+function flashShare(label) {
+  shareEl.textContent = label;
+  clearTimeout(shareTimer);
+  shareTimer = setTimeout(() => { shareEl.textContent = 'Share'; }, 1500);
+}
+
+// For browsers that refuse the clipboard API (no permission, not a secure page).
+function copyByHand(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.cssText = 'position:fixed;opacity:0';
+  document.body.append(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { /* not allowed either */ }
+  area.remove();
+  return ok;
 }
 
 // ---------- mouse and touch ----------
@@ -493,6 +534,26 @@ resizeEl.addEventListener('dblclick', () => {
 $('new').addEventListener('click', (e) => { e.currentTarget.blur(); newGame(); });
 
 shareEl.addEventListener('click', (e) => { e.currentTarget.blur(); share(); });
+
+const soundEl = $('sound');
+// The button cycles through the sound sets; each change plays a sample move.
+const SOUND_MODES = ['wood', 'synth', 'off'];
+let soundMode = SOUND_MODES.includes(load('sound', 'wood')) ? load('sound', 'wood') : 'wood';
+function renderSound() {
+  sound.setMode(soundMode);
+  soundEl.textContent = `Sound: ${soundMode}`;
+  soundEl.setAttribute('aria-pressed', String(soundMode !== 'off'));
+}
+renderSound();
+soundEl.addEventListener('click', () => {
+  soundMode = SOUND_MODES[(SOUND_MODES.indexOf(soundMode) + 1) % SOUND_MODES.length];
+  save('sound', soundMode);
+  renderSound();
+  soundEl.blur();
+  sound.unlock();
+  sound.play('move');
+  sound.play('capture', 0.25);
+});
 
 setEl.addEventListener('change', () => {
   ending = ENDINGS.find((x) => x.key === setEl.value);
