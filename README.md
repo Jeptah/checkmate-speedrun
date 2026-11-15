@@ -72,7 +72,8 @@ counted as a win.
 
 The **Sound** button switches between recorded sounds, fully generated sounds,
 and silence. The `.ogg` recordings in `sounds/` are from the
-[Impact Sounds](https://kenney.nl/assets/impact-sounds) pack by Kenney (CC0);
+[Impact Sounds](https://kenney.nl/assets/impact-sounds) pack by Kenney (CC0); the `.wav` recordings are from
+[Pixabay](https://pixabay.com/sound-effects) under the Pixabay Content License;
 the generated sounds are synthesised in the browser by `js/sound.js`.
 
 ## Run locally

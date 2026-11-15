@@ -9,18 +9,20 @@
 // sound plays instead.
 
 let ctx = null, master = null, noise = null;
+let out = null;                                  // where generated sounds are sent
 let enabled = true, recorded = true;
 
 // Recordings per sound; one is picked at random each time. Sounds not listed here
 // (new record) are always synthesised.
 const FILES = {
   move: ['chess3.wav'],
-  capture: ['footstep_concrete_001.ogg', 'footstep_concrete_002.ogg'],
-  check: ['impactMetal_heavy_003.ogg'],
+  capture: ['chess3.wav'],
   checked: ['impactGlass_heavy_004.ogg'],
   win: ['win-bell4.wav'],
   fail: ['fail-sound1.wav'],
 };
+// Playback speed of a recording: a capture is the move knock, 20% lower.
+const PITCH = { capture: 0.8 };
 const EVENTS = ['move', 'capture', 'check', 'checked', 'win', 'record', 'fail'];
 
 // Development aid: the local sound picker (sound-candidates/, not part of the site)
@@ -77,7 +79,7 @@ function envelope(t, peak, duration, attack = 0.002) {
   gain.gain.setValueAtTime(0.0001, t);
   gain.gain.exponentialRampToValueAtTime(peak, t + attack);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
-  gain.connect(master);
+  gain.connect(out ?? master);
   return gain;
 }
 
@@ -150,16 +152,22 @@ export function play(name, delay = 0, pitch = 1) {
   try {
     const t = ctx.currentTime + delay;
     const set = recorded ? samples[name] : null;
+    // In the recorded set everything but the move and capture knocks plays at a quarter volume.
+    const level = recorded && name !== 'move' && name !== 'capture' ? 0.25 : 1;
     if (set?.length) {
       const source = ctx.createBufferSource();
       source.buffer = set[Math.floor(Math.random() * set.length)];
-      source.playbackRate.value = pitch;
+      source.playbackRate.value = pitch * (PITCH[name] ?? 1);
       const gain = ctx.createGain();
-      gain.gain.value = 1.6;
+      gain.gain.value = 1.6 * level;
       source.connect(gain).connect(master);
       source.start(t);
     } else {
+      out = ctx.createGain();
+      out.gain.value = level;
+      out.connect(master);
       SOUNDS[name](t, pitch);
+      out = null;
     }
   } catch { /* audio is never essential */ }
 }

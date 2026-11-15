@@ -104,11 +104,9 @@ function play(man, to, animate, input = 'mouse') {
     placePiece(blackMan, true);
   }
 
-  // The reply lands at the same instant; its sound follows a beat later.
+  // Only our own move makes a sound; the reply is silent unless it gives check.
   sound.unlock();
   sound.play(result.white.includes('x') ? 'capture' : 'move');
-  if (result.blackMove) sound.play(result.black.includes('x') ? 'capture' : 'move', 0.1, 0.8);
-  if (!result.outcome && result.white.endsWith('+')) sound.play('check', 0.03);
   if (!result.outcome && whiteInCheck()) sound.play('checked', 0.13);
 
   const record = { white: result.white, black: result.black, loss: 0, input };

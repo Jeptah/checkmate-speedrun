@@ -3,3 +3,7 @@ The .ogg files in this folder are from the "Impact Sounds" pack (1.0) by Kenney
 http://creativecommons.org/publicdomain/zero/1.0/
 
 They keep their original file names.
+
+The .wav files (chess3, win-bell4, fail-sound1) are trimmed from sound effects
+downloaded from Pixabay (https://pixabay.com/sound-effects) and are used under
+the Pixabay Content License: https://pixabay.com/service/license-summary/
