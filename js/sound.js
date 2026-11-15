@@ -19,7 +19,7 @@ const FILES = {
   capture: ['chess3.wav'],
   checked: ['impactGlass_heavy_004.ogg'],
   win: ['win-bell4.wav'],
-  fail: ['fail-sound1.wav'],
+  fail: ['impactGlass_heavy_001.ogg'],
 };
 // Playback speed of a recording: a capture is the move knock, 20% lower.
 const PITCH = { capture: 0.8 };
